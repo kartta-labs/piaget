@@ -2,28 +2,35 @@
 """TODO(sasantv): DO NOT SUBMIT without one-line documentation for main.
 
 TODO(sasantv): DO NOT SUBMIT without a detailed description of main.
+NOTE: Everywhere in this code Y is index 0, and X is index 1.
 """
 import csv
 from operator import itemgetter
-import networkx as nx
+import networkx
 import numpy as np
-from scipy.stats import multivariate_normal
+from scipy.stats import multivariate_normal, truncnorm
+import matplotlib.pyplot as plt
+import time
+
+
+X = 1; Y= 0
 
 
 class Point(object):
-  def __init__(self, x: float, y: float):
-    '''Initializes point with x and y values'''
-    self.x = x
+  '''A 2D point in xy plane'''
+  def __init__(self, y: float, x: float):
     self.y = y
+    self.x = x
 
 class Rectangle(object):
+  '''Rectangle defined by its bottom_left and top_right corners'''
   def __init__(self, bottom_left: Point, top_right: Point):
-    '''Initializes point with x and y values'''
     self.bottom_left = bottom_left
     self.top_right = top_right
 
 
 class Grid(object):
+  '''A grid of cells. The grid is defined by a boundingbox (bbox) and the number of cells in each direction (nx, ny)'''
   def __init__(self, bbox: Rectangle, ny, nx):
     '''Creates a grid given a bbox and number of cells in each direction'''
     self.bbox = bbox
@@ -31,29 +38,43 @@ class Grid(object):
     self.ny = ny
     self.dx = float(bbox.top_right.x - bbox.bottom_left.x)/float(nx)
     self.dy = float(bbox.top_right.y - bbox.bottom_left.y)/float(ny)
+    self.distance_grid_cache = {}
     self.construct_grid()
   
   def construct_grid(self):
+    # Create an offset to center the cells.
     x_offset = self.dx/2
     y_offset =  self.dy/2
-
-    self.x, self.y = np.mgrid[self.bbox.bottom_left.x + x_offset:self.bbox.top_right.x:self.dx, self.bbox.bottom_left.y+y_offset:self.bbox.top_right.y:self.dy]
-    self.pos = np.dstack((self.x, self.y))
+    self.y, self.x = np.mgrid[self.bbox.bottom_left.y + y_offset:self.bbox.top_right.y:self.dy, self.bbox.bottom_left.x + x_offset:self.bbox.top_right.x:self.dx]
+    self.pos = np.dstack((self.y, self.x))
     self.cells = np.ones((self.ny, self.nx), dtype=float)
 
-  def get_cell(x, y):
-    row = int((y - self.bbox.bottom_left.y)/dy)
-    col = int((x - self.bbox.bottom_left.x)/dx)
+  def get_cell(self, y, x):
+    row = int((y - self.bbox.bottom_left.y)/self.dy)
+    col = int((x - self.bbox.bottom_left.x)/self.dx)
     return self.cells[row][col]
 
-  def set_cell(x, y, value):
-    row_index = int((y - self.bbox.bottom_left.y)/dy)
-    col_index = int((x - self.bbox.bottom_left.x)/dx)
+  def get_pos_index(self, pos):
+    row = int((pos[Y] - self.bbox.bottom_left.y)/self.dy)
+    col = int((pos[X] - self.bbox.bottom_left.x)/self.dx)
+    return (row, col)
+
+  def set_cell(self, y, x, value):
+    row_index = int((y - self.bbox.bottom_left.y)/self.dy)
+    col_index = int((x - self.bbox.bottom_left.x)/self.dx)
     self.cells[row_index][col_index] = value
+  
+  def distance_grid(self, pos):
+    if pos.tobytes() not in self.distance_grid_cache:
+      distance_grid = np.sqrt((pos[X] - self.x)**2 + (pos[Y] - self.y)**2)
+      self.distance_grid_cache[pos.tobytes()] = distance_grid
+    return self.distance_grid_cache[pos.tobytes()]
 
 class ProbabilityGrid(object):
   def __init__(self, bbox: Rectangle, ny, nx, normalize: bool = True):
-    self.grid = Grid(bbox, ny, nx)
+    self.grid = Grid(bbox=bbox, ny=ny, nx=nx)
+    self.truncnorm_grid_cache = {}  # deprecated
+    self.truncnorm_lookup_grid_cache = {}
     if normalize:
       self.normalize()
 
@@ -63,7 +84,7 @@ class ProbabilityGrid(object):
     if normalize:
       self.normalize
   def probability_sum_check(self):
-    return np.sum(self.grid.cells) * (self.grid.dx * self.grid.dy)
+    return np.sum(self.grid.cells) * (self.grid.dy * self.grid.dx)
 
   def normalize(self):
     norm = self.probability_sum_check()
@@ -76,87 +97,146 @@ class ProbabilityGrid(object):
     if normalize:
       self.normalize()
 
+  def get_probability_in_cell(self, y, x):
+    return self.grid.get_cell(y, x) * self.grid.dy * self.grid.dx
+ 
+  def get_truncnorm_grid_old(self, pos, a, loc, scale):
+    key = np.array([pos[0], pos[1], a, loc, scale])
+    if key.tobytes() not in self.truncnorm_grid_cache:
+      self.truncnorm_grid_cache[key.tobytes()] = truncnorm.pdf(self.grid.distance_grid(pos), a, b = np.inf, loc = loc, scale = scale)
+    return self.truncnorm_grid_cache[key.tobytes()]
 
-def create_attribute_dictionaries(nodes_header, nodes):
-  dict_of_attr = {}
-  for i in range(1, len(nodes_header)):
+  def get_truncnorm_grid(self, pos, a, loc, scale):
+    key = np.array([a, loc, scale])
+    if key.tobytes() not in self.truncnorm_lookup_grid_cache:
+      truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
+      
+      print(truncnorm_lookup_grid.distance_grid(np.array([0,0])))
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale)
+    row, col = self.grid.get_pos_index(pos)
+    return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
+
+class Geotagging(object):
+  def __init__(self, path_to_nodes_csv, path_to_edges_csv, bbox: Rectangle, ny, nx):
+    self.graph = networkx.Graph()
+    self.bbox = bbox
+    self.nx = nx
+    self.ny = ny
+
+    self.load_nodes(path_to_nodes_csv)
+    self.load_edges(path_to_edges_csv)
+
+  def set_attributes(self):
+    header_to_index = {}
+    for i in range(0, len(self.nodes_header)):
+      header_to_index[self.nodes_header[i]] = i
+    
+    # get mean_x and mean_y attributes
+    attributes_dict = {}
+    for key in ["mean_y", "mean_x"]:
+      attributes = {}
+      for node in self.nodes:
+        attributes[node[header_to_index["id"]]] = float(node[header_to_index[key]])
+      attributes_dict[key] = attributes
+
     attributes = {}
-    for node in nodes:
-      attributes[node[0]] = float(node[i])
-    dict_of_attr[nodes_header[i]] = attributes
-  return dict_of_attr
+    for node in self.nodes:
+      covariance = np.array([[float(node[header_to_index["cov_yy"]]), float(node[header_to_index["cov_yx"]])], [float(node[header_to_index["cov_yx"]]), float(node[header_to_index["cov_xx"]])]])
+      mean = [float(node[header_to_index["mean_y"]]), float(node[header_to_index["mean_x"]])]
+      prob_grid = ProbabilityGrid(bbox=self.bbox, ny=self.ny, nx=self.nx, normalize=True)
+      if node[header_to_index["known_location"]].lower() == "true":
+        prob_grid.overwrite_with_normal_dist(mean=mean, cov=covariance, normalize=True)
+      attributes[node[header_to_index["id"]]] = prob_grid
+    attributes_dict["probability_grid"] = attributes
 
-def bbox_intersection(min_x_0, min_y_0, max_x_0, max_y_0, min_x_1, min_y_1, max_x_1, max_y_1):
-  min_x = max(min_x_0, min_x_1)
-  min_y = max(min_y_0, min_y_1)
-  max_x = min(max_x_0, max_x_1)
-  max_y = min(max_y_0, max_y_1)
-  area = abs(max((max_x - min_x, 0)) * max((max_y - min_y), 0))
-  if area == 0:
-    return [None, None, None, None]
-  return [min_x, min_y, max_x, max_y]
+    for key in attributes_dict:
+      networkx.set_node_attributes(self.graph, attributes_dict[key], key)
+
+  def load_nodes(self, path_to_csv):
+    # Read the nodes csv file
+    with open(path_to_csv, 'r') as nodecsv:
+        reader = csv.reader(nodecsv)
+        data = [n for n in reader]
+        # Get the first line in the csv as the header.
+        self.nodes_header = data[0]
+        self.nodes = data[1:]
+    # Store the node IDs (the first item in each row)
+    self.node_ids = [n[0] for n in self.nodes]
+    self.graph.add_nodes_from(self.node_ids)
+    self.set_attributes()
+
+  def load_edges(self, path_to_csv):
+    # Read the edges csv file
+    with open(path_to_csv, 'r') as edgecsv:
+      reader = csv.reader(edgecsv)
+      data = [n for n in reader]
+      # edges = [tuple(e) for e in reader][1:]
+      self.edges = []
+      for e in data[1:]:
+        self.edges.append(
+          tuple(
+              [e[0],e[1],np.array([e[2],e[3]])]
+            )
+        )
+    self.graph.add_weighted_edges_from(self.edges, weight="mean_distance_and_standard_deviation")
+
+  def propogate(self):
+    start_round = time.time()
+    for node in self.graph.nodes:
+      print("node: {}".format(node))
+      node_attributes = self.graph.nodes[node]
+      for neighbor in self.graph.neighbors(node):
+        start_neighbor = time.time()
+        neighbor_attributes = self.graph.nodes[neighbor]
+        [mean, std] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
+        a = (0 - mean) / std
+        # TODO: following is not correct. it needs to be adjusted for the circle perim
+        print("neighbor: {}".format(neighbor))
+        likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
+        for col in node_attributes["probability_grid"].grid.pos:
+          for pos in col:
+            start_pos = time.time()
+            likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
+            # print("time for one pos: {}".format(time.time() - start_pos))
+        if (np.sum(likelihood) > 0):
+          # if, for any reason, likelihood is zero, don't apply it.
+          likelihood /= np.sum(likelihood)
+          neighbor_attributes["probability_grid"].posterior(likelihood, True) 
+        print("time for one neighbor: {}".format(time.time() - start_neighbor))
+    print("time for one round: {}".format(time.time() - start_round))
+
 
 def main():
-  bottom_left = Point(-1,-1)
-  top_right = Point(1,1)
-  nx = 10
-  ny = 10
+  bottom_left = Point(-4,-2)
+  top_right = Point(12,10)
+  nx = 20
+  ny = 20
   bbox = Rectangle(bottom_left, top_right)
-  prob_grid = ProbabilityGrid(bbox, nx, ny)
-  prob_grid.overwrite_with_normal_dist(mean=[0,0], cov=[[1, 0], [0, 1]], normalize=False)
-  print(prob_grid.probability_sum_check())
-  prob_grid.normalize()
-  print(prob_grid.probability_sum_check())
-  shape = prob_grid.grid.cells.shape
-  prob_grid.posterior(prob_grid.grid.cells * np.random.rand(shape[0],shape[1]), normalize=False)
 
-  print(prob_grid.probability_sum_check())
-  prob_grid.normalize()
-  print(prob_grid.probability_sum_check())
+  geotagging = Geotagging("data/nodes.csv", "data/edges.csv", bbox=bbox, ny=ny, nx=nx)
+  print(networkx.info(geotagging.graph))
 
-  return
-  # Read the nodes csv file
-  with open('data/nodes.csv', 'r') as nodecsv:
-      reader = csv.reader(nodecsv)
-      data = [n for n in reader]
-      # Get the first line in the csv as the header.
-      nodes_header = data[0]
-      nodes = data[1:]
-  # Store the node IDs (the first item in each row)
-  node_ids = [n[0] for n in nodes]
-
-  # Read the edges csv file
-  with open('data/edges.csv', 'r') as edgecsv:
-      reader = csv.reader(edgecsv)
-      edges = [tuple(e) for e in reader][1:]
-
-  # Construct the graph
-  G = nx.Graph()
-  G.add_nodes_from(node_ids)
-  G.add_weighted_edges_from(edges, weight="distance")
-  print(nx.info(G))
-
-  attributes = createAttributeDictionaries(nodes_header, nodes)
-
-  # Set node attributes
-  for key in attributes:
-    nx.set_node_attributes(G, attributes[key], key)
-  
-  for i in range(5):
+  rounds = 50
+  for i in range(rounds):
     print("next round")
-    for node in G.nodes:
-      node_attributes = G.nodes[node]
-      for neighbor in G.neighbors(node):
-        neighbor_attributes = G.nodes[neighbor]
-        distance = float(G[node][neighbor]["distance"])
-        [min_x, min_y, max_x, max_y] = bbox_intersection(node_attributes["min_x"]-distance, node_attributes["min_y"]-distance, node_attributes["max_x"]+distance, node_attributes["max_y"]+distance, neighbor_attributes["min_x"], neighbor_attributes["min_y"], neighbor_attributes["max_x"], neighbor_attributes["max_y"])
-        print(neighbor)
-        print([min_x, min_y, max_x, max_y])
-        if (max_x is not None):
-          neighbor_attributes["min_x"] = min_x
-          neighbor_attributes["min_y"] = min_y
-          neighbor_attributes["max_x"] = max_x
-          neighbor_attributes["max_y"] = max_y
-  
+    geotagging.propogate()
+
+  print("results:")
+  plt.ioff()
+  for node in geotagging.graph.nodes:
+    node_attributes = geotagging.graph.nodes[node]
+    plt.close()
+    plt.imshow(node_attributes["probability_grid"].grid.cells, cmap='viridis', origin='lower',extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
+    plt.colorbar()
+    plt.savefig('{}-{}.png'.format(node, ""))
+    np.max(node_attributes["probability_grid"].normalize())
+    print("This node:")
+    print(node)
+    # print(node_attributes["probability_grid"].grid.cells)
+
+    max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
+    print(max_pos_index)
+    print(node_attributes["probability_grid"].grid.pos[max_pos_index])
+
 if __name__ == '__main__':
   main()

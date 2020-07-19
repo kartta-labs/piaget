@@ -1,5 +1,6 @@
-source, targe
-a,b,2
-b,c,2
-c,d,1
-d,e,2
+source, target, mean_distance, standard_deviation
+a,b,1,0.1
+b,c,1,0.1
+c,d,2,0.1
+d,e,4,0.1
+e,f,6,0.1
