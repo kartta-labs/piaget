@@ -110,9 +110,7 @@ class ProbabilityGrid(object):
     key = np.array([a, loc, scale])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
       truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
-      
-      print(truncnorm_lookup_grid.distance_grid(np.array([0,0])))
-      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale)
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) #/ truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
     row, col = self.grid.get_pos_index(pos)
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
 
@@ -139,6 +137,12 @@ class Geotagging(object):
         attributes[node[header_to_index["id"]]] = float(node[header_to_index[key]])
       attributes_dict[key] = attributes
 
+    for key in ["locked"]:
+      attributes = {}
+      for node in self.nodes:
+        attributes[node[header_to_index["id"]]] = node[header_to_index[key]]
+      attributes_dict[key] = attributes
+
     attributes = {}
     for node in self.nodes:
       covariance = np.array([[float(node[header_to_index["cov_yy"]]), float(node[header_to_index["cov_yx"]])], [float(node[header_to_index["cov_yx"]]), float(node[header_to_index["cov_xx"]])]])
@@ -148,6 +152,14 @@ class Geotagging(object):
         prob_grid.overwrite_with_normal_dist(mean=mean, cov=covariance, normalize=True)
       attributes[node[header_to_index["id"]]] = prob_grid
     attributes_dict["probability_grid"] = attributes
+
+    attributes = {}
+    for node in self.nodes:
+      attributes[node[header_to_index["id"]]] = set()
+      if node[header_to_index["known_location"]].lower() == "true":
+        attributes[node[header_to_index["id"]]].add(node[header_to_index["id"]])
+    attributes_dict["received_message_sources"] = attributes
+
 
     for key in attributes_dict:
       networkx.set_node_attributes(self.graph, attributes_dict[key], key)
@@ -180,7 +192,8 @@ class Geotagging(object):
         )
     self.graph.add_weighted_edges_from(self.edges, weight="mean_distance_and_standard_deviation")
 
-  def propogate(self):
+  def propogate(self) -> bool:
+    some_probabilities_were_updated = False
     start_round = time.time()
     for node in self.graph.nodes:
       print("node: {}".format(node))
@@ -190,36 +203,43 @@ class Geotagging(object):
         neighbor_attributes = self.graph.nodes[neighbor]
         [mean, std] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
         a = (0 - mean) / std
-        # TODO: following is not correct. it needs to be adjusted for the circle perim
         print("neighbor: {}".format(neighbor))
         likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
         for col in node_attributes["probability_grid"].grid.pos:
           for pos in col:
             start_pos = time.time()
+            # TODO: following is not correct. it needs to be adjusted for the circle perim
             likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
             # print("time for one pos: {}".format(time.time() - start_pos))
-        if (np.sum(likelihood) > 0):
-          # if, for any reason, likelihood is zero, don't apply it.
-          likelihood /= np.sum(likelihood)
-          neighbor_attributes["probability_grid"].posterior(likelihood, True) 
-        print("time for one neighbor: {}".format(time.time() - start_neighbor))
-    print("time for one round: {}".format(time.time() - start_round))
+        if (neighbor_attributes["received_message_sources"] != node_attributes["received_message_sources"]):
+          # if no new message source is available, skip.
+          neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
+          if (neighbor_attributes["locked"].lower() != "true" and np.sum(likelihood) > 0):
+            # if the neighbor's location is locker, skip.
+            # if, for any reason, likelihood is zero, skip.
+            likelihood /= np.sum(likelihood)
+            neighbor_attributes["probability_grid"].posterior(likelihood, True)
+            some_probabilities_were_updated = True
+    return some_probabilities_were_updated
 
 
 def main():
-  bottom_left = Point(-4,-2)
-  top_right = Point(12,10)
-  nx = 20
-  ny = 20
+  experiment_folder="linear-misplaced"
+  bottom_left = Point(-2,-2)
+  top_right = Point(10,10)
+  nx = 100
+  ny = 100
   bbox = Rectangle(bottom_left, top_right)
 
-  geotagging = Geotagging("data/nodes.csv", "data/edges.csv", bbox=bbox, ny=ny, nx=nx)
+  geotagging = Geotagging("data/{}/nodes.csv".format(experiment_folder), "data/{}/edges.csv".format(experiment_folder), bbox=bbox, ny=ny, nx=nx)
   print(networkx.info(geotagging.graph))
 
-  rounds = 50
+  rounds = 10
   for i in range(rounds):
-    print("next round")
-    geotagging.propogate()
+    print("round {}".format(i))
+    if(not geotagging.propogate()):
+      break
+
 
   print("results:")
   plt.ioff()
@@ -228,7 +248,7 @@ def main():
     plt.close()
     plt.imshow(node_attributes["probability_grid"].grid.cells, cmap='viridis', origin='lower',extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
     plt.colorbar()
-    plt.savefig('{}-{}.png'.format(node, ""))
+    plt.savefig('data/{}/{}.png'.format(experiment_folder,node))
     np.max(node_attributes["probability_grid"].normalize())
     print("This node:")
     print(node)
@@ -237,6 +257,9 @@ def main():
     max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
     print(max_pos_index)
     print(node_attributes["probability_grid"].grid.pos[max_pos_index])
+    print(node_attributes["received_message_sources"])
+  
+  print("finished in {} rounds.".format(i+1))
 
 if __name__ == '__main__':
   main()

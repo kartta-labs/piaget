@@ -1,7 +1,0 @@
-id,mean_y,mean_x,known_location,cov_yy,cov_yx,cov_xx
-a,0,0,True,0.1,0,0.1
-b,0,1,False,-1,-1,-1
-c,0,2,False,-1,0,0.1
-d,0,4,True,.1,0,.1
-e,4,4,True,.1,0,.1
-f,10,4,True,.1,0,.1
