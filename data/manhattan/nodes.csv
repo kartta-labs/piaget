@@ -1,7 +1,7 @@
 id,mean_y,mean_x,known_location,locked,cov_yy,cov_yx,cov_xx
-a,0,0,True,True,0.1,0,0.1
-b,0,1,False,False,-1,-1,-1
-c,0,2,False,False,-1,0,0.1
-d,5,2,False,False,.1,0,.1
-e,0,4,False,False,.1,0,.1
-f,0,5,True,True,.01,0,.01
+a,0,0,True,True,0.01,0,0.01
+b,0,1,True,False,.1,0,.1
+c,0,2,False,False,0.01,0,0.01
+d,1,2,True,False,.1,0,.1
+e,1,3,True,False,.1,0,.1
+f,1,4,True,True,.01,0,.01

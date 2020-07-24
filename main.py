@@ -224,11 +224,11 @@ class Geotagging(object):
 
 
 def main():
-  experiment_folder="linear-misplaced"
+  experiment_folder="manhattan"
   bottom_left = Point(-2,-2)
-  top_right = Point(10,10)
-  nx = 100
-  ny = 100
+  top_right = Point(5,5)
+  nx = 50
+  ny = 50
   bbox = Rectangle(bottom_left, top_right)
 
   geotagging = Geotagging("data/{}/nodes.csv".format(experiment_folder), "data/{}/edges.csv".format(experiment_folder), bbox=bbox, ny=ny, nx=nx)
