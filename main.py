@@ -1,9 +1,20 @@
-# Lint as: python3
-"""TODO(sasantv): DO NOT SUBMIT without one-line documentation for main.
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-TODO(sasantv): DO NOT SUBMIT without a detailed description of main.
-NOTE: Everywhere in this code Y is index 0, and X is index 1.
+""" Piaget is a system to geotag historical building photos.
 """
+
 import csv
 from operator import itemgetter
 import networkx
@@ -26,6 +37,7 @@ class Point(object):
   def __init__(self, y: float, x: float):
     self.y = y
     self.x = x
+
 
 class Rectangle(object):
   """Rectangle defined by its bottom_left and top_right corners"""
@@ -96,6 +108,7 @@ class Grid(object):
       self.distance_grid_cache[pos.tobytes()] = distance_grid
     return self.distance_grid_cache[pos.tobytes()]
 
+
 class ProbabilityGrid(object):
   def __init__(self, bbox: Rectangle, ny, nx, normalize: bool = True):
     self.grid = Grid(bbox=bbox, ny=ny, nx=nx)
@@ -139,6 +152,7 @@ class ProbabilityGrid(object):
       self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) / truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
     row, col = self.grid.get_pos_index(pos)
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
+
 
 class Geotagging(object):
   def __init__(self, path_to_nodes_csv, path_to_edges_csv, bbox: Rectangle, ny, nx):
@@ -255,7 +269,6 @@ def main():
   print(args.configs)
   with open(args.configs, "r") as stream:
     configs = yaml.safe_load(stream)
-  
 
   experiment_folder="manhattan"
   bottom_left = Point(-2,-2)
