@@ -11,28 +11,33 @@ import numpy as np
 from scipy.stats import multivariate_normal, truncnorm
 import matplotlib.pyplot as plt
 import time
-
+import argparse
+import yaml
 
 X = 1; Y= 0
 
+parser = argparse.ArgumentParser(description="Piaget: Enter the input YAML file using the --configs flag.")
+required = parser.add_argument_group('required arguments')
+required.add_argument("--configs", help="path to the configs YAML file.", required=True)
+
 
 class Point(object):
-  '''A 2D point in xy plane'''
+  """A 2D point in xy plane"""
   def __init__(self, y: float, x: float):
     self.y = y
     self.x = x
 
 class Rectangle(object):
-  '''Rectangle defined by its bottom_left and top_right corners'''
+  """Rectangle defined by its bottom_left and top_right corners"""
   def __init__(self, bottom_left: Point, top_right: Point):
     self.bottom_left = bottom_left
     self.top_right = top_right
 
 
 class Grid(object):
-  '''A grid of cells. The grid is defined by a boundingbox (bbox) and the number of cells in each direction (nx, ny)'''
+  """A grid of cells. The grid is defined by a boundingbox (bbox) and the number of cells in each direction (nx, ny)"""
   def __init__(self, bbox: Rectangle, ny, nx):
-    '''Creates a grid given a bbox and number of cells in each direction'''
+    """Creates a grid given a bbox and number of cells in each direction"""
     self.bbox = bbox
     self.nx = nx
     self.ny = ny
@@ -64,8 +69,29 @@ class Grid(object):
     col_index = int((x - self.bbox.bottom_left.x)/self.dx)
     self.cells[row_index][col_index] = value
   
+  def haversine_distance(lon1, lat1, lon2, lat2):
+      """
+      Calculate the distance between two points on the earth given
+      their latitude and longitude in decimal degrees.
+      """
+      #degrees to radians:
+      lon1 = np.radians(lon1.values)
+      lat1 = np.radians(lat1.values)
+      lon2 = np.radians(lon2.values)
+      lat2 = np.radians(lat2.values)
+
+      delta_lon = np.subtract(lon2, lon1)
+      delta_lat = np.subtract(lat2, lat1)
+
+      a = np.sin((delta_lat)/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin((delta_lon)/2)**2
+      c = 2*np.arcsin(np.sqrt(a))
+      earth_radius_meters = 6371 * 1000
+
+      return earth_radius_meters*c
+
   def distance_grid(self, pos):
     if pos.tobytes() not in self.distance_grid_cache:
+      # distance_grid = self.haversine_distance(self.x, self.y, pos[X], pos[Y])
       distance_grid = np.sqrt((pos[X] - self.x)**2 + (pos[Y] - self.y)**2)
       self.distance_grid_cache[pos.tobytes()] = distance_grid
     return self.distance_grid_cache[pos.tobytes()]
@@ -110,7 +136,7 @@ class ProbabilityGrid(object):
     key = np.array([a, loc, scale])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
       truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
-      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) #/ truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) / truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
     row, col = self.grid.get_pos_index(pos)
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
 
@@ -166,7 +192,7 @@ class Geotagging(object):
 
   def load_nodes(self, path_to_csv):
     # Read the nodes csv file
-    with open(path_to_csv, 'r') as nodecsv:
+    with open(path_to_csv, "r") as nodecsv:
         reader = csv.reader(nodecsv)
         data = [n for n in reader]
         # Get the first line in the csv as the header.
@@ -179,7 +205,7 @@ class Geotagging(object):
 
   def load_edges(self, path_to_csv):
     # Read the edges csv file
-    with open(path_to_csv, 'r') as edgecsv:
+    with open(path_to_csv, "r") as edgecsv:
       reader = csv.reader(edgecsv)
       data = [n for n in reader]
       # edges = [tuple(e) for e in reader][1:]
@@ -193,7 +219,7 @@ class Geotagging(object):
     self.graph.add_weighted_edges_from(self.edges, weight="mean_distance_and_standard_deviation")
 
   def propogate(self) -> bool:
-    some_probabilities_were_updated = False
+    at_least_one_probability_was_updated = False
     start_round = time.time()
     for node in self.graph.nodes:
       print("node: {}".format(node))
@@ -211,26 +237,33 @@ class Geotagging(object):
             # TODO: following is not correct. it needs to be adjusted for the circle perim
             likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
             # print("time for one pos: {}".format(time.time() - start_pos))
-        if (neighbor_attributes["received_message_sources"] != node_attributes["received_message_sources"]):
+        if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"])):
           # if no new message source is available, skip.
           neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
           if (neighbor_attributes["locked"].lower() != "true" and np.sum(likelihood) > 0):
-            # if the neighbor's location is locker, skip.
+            # if the neighbor"s location is locker, skip.
             # if, for any reason, likelihood is zero, skip.
             likelihood /= np.sum(likelihood)
             neighbor_attributes["probability_grid"].posterior(likelihood, True)
-            some_probabilities_were_updated = True
-    return some_probabilities_were_updated
+            at_least_one_probability_was_updated = True
+    return at_least_one_probability_was_updated
 
 
 def main():
+
+  args = parser.parse_args()
+  print(args.configs)
+  with open(args.configs, "r") as stream:
+    configs = yaml.safe_load(stream)
+  
+
   experiment_folder="manhattan"
   bottom_left = Point(-2,-2)
   top_right = Point(5,5)
-  nx = 50
-  ny = 50
+  nx = configs["nx"]
+  ny = configs["ny"]
   bbox = Rectangle(bottom_left, top_right)
-
+  
   geotagging = Geotagging("data/{}/nodes.csv".format(experiment_folder), "data/{}/edges.csv".format(experiment_folder), bbox=bbox, ny=ny, nx=nx)
   print(networkx.info(geotagging.graph))
 
@@ -246,9 +279,9 @@ def main():
   for node in geotagging.graph.nodes:
     node_attributes = geotagging.graph.nodes[node]
     plt.close()
-    plt.imshow(node_attributes["probability_grid"].grid.cells, cmap='viridis', origin='lower',extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
+    plt.imshow(node_attributes["probability_grid"].grid.cells, cmap="viridis", origin="lower",extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
     plt.colorbar()
-    plt.savefig('data/{}/{}.png'.format(experiment_folder,node))
+    plt.savefig("data/{}/{}.png".format(experiment_folder,node))
     np.max(node_attributes["probability_grid"].normalize())
     print("This node:")
     print(node)
@@ -261,5 +294,5 @@ def main():
   
   print("finished in {} rounds.".format(i+1))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
   main()
