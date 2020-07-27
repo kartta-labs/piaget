@@ -1,0 +1,4 @@
+id,mean_y,mean_x,known_location,locked,cov_yy,cov_yx,cov_xx
+a,0,0,True,True,0.1,0,0.1
+b,0,1,False,False,-1,-1,-1
+c,0,1.5,False,False,-1,-1,-1
