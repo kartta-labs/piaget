@@ -1,7 +1,0 @@
-id,mean_y,mean_x,known_location,locked,cov_yy,cov_yx,cov_xx
-a,0,0,True,True,.001,0,.001
-b,0,1,False,False,.1,0,.1
-c,0,2,False,False,.001,0,.001
-d,0,3,False,False,.1,0,.1
-e,0,4,False,False,.1,0,.1
-f,0,5,True,True,.001,0,.001
