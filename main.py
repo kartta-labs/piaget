@@ -24,6 +24,8 @@ import matplotlib.pyplot as plt
 import time
 import argparse
 import yaml
+from pathlib import Path
+
 
 X = 1; Y= 0
 
@@ -244,16 +246,18 @@ class Geotagging(object):
         [mean, std] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
         a = (0 - mean) / std
         print("neighbor: {}".format(neighbor))
+        edge_message = [node, neighbor]
+        edge_message.sort()
+        edge_message = "".join(edge_message)
         likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
         for col in node_attributes["probability_grid"].grid.pos:
           for pos in col:
             start_pos = time.time()
-            # TODO: following is not correct. it needs to be adjusted for the circle perim
             likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
-            # print("time for one pos: {}".format(time.time() - start_pos))
-        if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"])):
+        if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"]) or edge_message not in neighbor_attributes["received_message_sources"]):
           # if no new message source is available, skip.
           neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
+          neighbor_attributes["received_message_sources"].add(edge_message)
           if (neighbor_attributes["locked"].lower() != "true" and np.sum(likelihood) > 0):
             # if the neighbor"s location is locker, skip.
             # if, for any reason, likelihood is zero, skip.
@@ -264,28 +268,28 @@ class Geotagging(object):
 
 
 def main():
-
   args = parser.parse_args()
   print(args.configs)
   with open(args.configs, "r") as stream:
     configs = yaml.safe_load(stream)
 
-  experiment_folder="manhattan"
-  bottom_left = Point(-2,-2)
-  top_right = Point(5,5)
+  configs_path = Path(args.configs)
+
+  bottom_left = Point(configs["bottom_left_y"], configs["bottom_left_x"])
+  top_right = Point(configs["top_right_y"], configs["top_right_x"])
   nx = configs["nx"]
   ny = configs["ny"]
   bbox = Rectangle(bottom_left, top_right)
   
-  geotagging = Geotagging("data/{}/nodes.csv".format(experiment_folder), "data/{}/edges.csv".format(experiment_folder), bbox=bbox, ny=ny, nx=nx)
+  geotagging = Geotagging("{}/nodes.csv".format(configs_path.parent), "{}/edges.csv".format(configs_path.parent), bbox=bbox, ny=ny, nx=nx)
   print(networkx.info(geotagging.graph))
 
-  rounds = 10
-  for i in range(rounds):
-    print("round {}".format(i))
+  counter = 0
+  while(True):
+    print("round {}".format(counter))
+    counter += 1
     if(not geotagging.propogate()):
       break
-
 
   print("results:")
   plt.ioff()
@@ -294,18 +298,16 @@ def main():
     plt.close()
     plt.imshow(node_attributes["probability_grid"].grid.cells, cmap="viridis", origin="lower",extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
     plt.colorbar()
-    plt.savefig("data/{}/{}.png".format(experiment_folder,node))
+    plt.savefig("{}/{}.png".format(configs_path.parent,node))
     np.max(node_attributes["probability_grid"].normalize())
     print("This node:")
     print(node)
-    # print(node_attributes["probability_grid"].grid.cells)
-
     max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
     print(max_pos_index)
     print(node_attributes["probability_grid"].grid.pos[max_pos_index])
     print(node_attributes["received_message_sources"])
   
-  print("finished in {} rounds.".format(i+1))
+  print("finished in {} rounds.".format(counter+1))
 
 if __name__ == "__main__":
   main()
