@@ -14,7 +14,7 @@
 
 nx: 50
 ny: 50
-bottom_left_x: -2
-bottom_left_y: -2
-top_right_x: 5
-top_right_y: 5
+bottom_left_x: -3
+bottom_left_y: -3
+top_right_x: 3
+top_right_y: 3

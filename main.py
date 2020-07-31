@@ -25,6 +25,7 @@ import time
 import argparse
 import yaml
 from pathlib import Path
+import re
 
 
 X = 1; Y= 0
@@ -32,6 +33,11 @@ X = 1; Y= 0
 parser = argparse.ArgumentParser(description="Piaget: Enter the input YAML file using the --configs flag.")
 required = parser.add_argument_group('required arguments')
 required.add_argument("--configs", help="path to the configs YAML file.", required=True)
+
+
+def get_valid_filename(s):
+    s = str(s).strip().replace(" ", "_")
+    return re.sub(r"(?u)[^-\w.]", "", s)
 
 
 class Point(object):
@@ -83,16 +89,16 @@ class Grid(object):
     col_index = int((x - self.bbox.bottom_left.x)/self.dx)
     self.cells[row_index][col_index] = value
   
-  def haversine_distance(lon1, lat1, lon2, lat2):
+  def haversine_distance(self, lon1, lat1, lon2, lat2):
       """
       Calculate the distance between two points on the earth given
       their latitude and longitude in decimal degrees.
       """
       #degrees to radians:
-      lon1 = np.radians(lon1.values)
-      lat1 = np.radians(lat1.values)
-      lon2 = np.radians(lon2.values)
-      lat2 = np.radians(lat2.values)
+      lon1 = np.radians(lon1)
+      lat1 = np.radians(lat1)
+      lon2 = np.radians(lon2)
+      lat2 = np.radians(lat2)
 
       delta_lon = np.subtract(lon2, lon1)
       delta_lat = np.subtract(lat2, lat1)
@@ -105,8 +111,8 @@ class Grid(object):
 
   def distance_grid(self, pos):
     if pos.tobytes() not in self.distance_grid_cache:
-      # distance_grid = self.haversine_distance(self.x, self.y, pos[X], pos[Y])
-      distance_grid = np.sqrt((pos[X] - self.x)**2 + (pos[Y] - self.y)**2)
+      distance_grid = self.haversine_distance(self.x, self.y, pos[X], pos[Y])
+      # distance_grid = np.sqrt((pos[X] - self.x)**2 + (pos[Y] - self.y)**2)
       self.distance_grid_cache[pos.tobytes()] = distance_grid
     return self.distance_grid_cache[pos.tobytes()]
 
@@ -151,7 +157,9 @@ class ProbabilityGrid(object):
     key = np.array([a, loc, scale])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
       truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
-      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) / truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      denominator = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      denominator[denominator==0] = np.finfo(float).eps
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) / denominator
     row, col = self.grid.get_pos_index(pos)
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
 
@@ -298,8 +306,8 @@ def main():
     plt.close()
     plt.imshow(node_attributes["probability_grid"].grid.cells, cmap="viridis", origin="lower",extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
     plt.colorbar()
-    plt.savefig("{}/{}.png".format(configs_path.parent,node))
-    np.max(node_attributes["probability_grid"].normalize())
+    plt.savefig("{}/{}.png".format(configs_path.parent,get_valid_filename(node)))
+    node_attributes["probability_grid"].normalize()
     print("This node:")
     print(node)
     max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
