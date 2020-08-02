@@ -16,6 +16,7 @@
 """
 
 import csv
+import json
 from operator import itemgetter
 import networkx
 import numpy as np
@@ -89,7 +90,8 @@ class Grid(object):
     col_index = int((x - self.bbox.bottom_left.x)/self.dx)
     self.cells[row_index][col_index] = value
   
-  def haversine_distance(self, lon1, lat1, lon2, lat2):
+  @staticmethod
+  def haversine_distance(lon1, lat1, lon2, lat2):
       """
       Calculate the distance between two points on the earth given
       their latitude and longitude in decimal degrees.
@@ -244,12 +246,10 @@ class Geotagging(object):
 
   def propogate(self) -> bool:
     at_least_one_probability_was_updated = False
-    start_round = time.time()
     for node in self.graph.nodes:
       print("node: {}".format(node))
       node_attributes = self.graph.nodes[node]
       for neighbor in self.graph.neighbors(node):
-        start_neighbor = time.time()
         neighbor_attributes = self.graph.nodes[neighbor]
         [mean, std] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
         a = (0 - mean) / std
@@ -260,7 +260,6 @@ class Geotagging(object):
         likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
         for col in node_attributes["probability_grid"].grid.pos:
           for pos in col:
-            start_pos = time.time()
             likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
         if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"]) or edge_message not in neighbor_attributes["received_message_sources"]):
           # if no new message source is available, skip.
@@ -274,8 +273,14 @@ class Geotagging(object):
             at_least_one_probability_was_updated = True
     return at_least_one_probability_was_updated
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 
 def main():
+  start_time = time.time()
   args = parser.parse_args()
   print(args.configs)
   with open(args.configs, "r") as stream:
@@ -300,6 +305,7 @@ def main():
       break
 
   print("results:")
+  """
   plt.ioff()
   for node in geotagging.graph.nodes:
     node_attributes = geotagging.graph.nodes[node]
@@ -314,8 +320,23 @@ def main():
     print(max_pos_index)
     print(node_attributes["probability_grid"].grid.pos[max_pos_index])
     print(node_attributes["received_message_sources"])
-  
-  print("finished in {} rounds.".format(counter+1))
+  """
 
+  results = {}
+  for node in geotagging.graph.nodes:
+    node_attributes = geotagging.graph.nodes[node]
+    node_attributes["probability_grid"].normalize()
+    max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
+    node_attributes["max_probablity_cell_center"] = list(node_attributes["probability_grid"].grid.pos[max_pos_index])
+    node_attributes["distance_of_max_to_ground_truth"] = Grid.haversine_distance(node_attributes["mean_x"], node_attributes["mean_y"], node_attributes["max_probablity_cell_center"][X], node_attributes["max_probablity_cell_center"][Y])
+    node_attributes["probability_grid"] = node_attributes["probability_grid"].grid.cells
+    node_attributes["received_message_sources"] = list(node_attributes["received_message_sources"])
+    results[node] = {"attributes":node_attributes}
+
+  print(json.dumps(results,cls=NumpyEncoder))
+  with open("{}/results.txt".format(configs_path.parent), "w") as outfile:
+    json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
+  print("finished in {} rounds.".format(counter+1))
+  print(time.time() - start_time)
 if __name__ == "__main__":
   main()

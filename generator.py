@@ -234,6 +234,9 @@ def main():
         if (node,neighbor) not in edges:
           edge = (neighbor,node)
         writer.writerow([edge[0], edge[1],edges[edge],0.1,year])
+        with open('data/synthetic/nodes-{}.csv'.format(number_of_unique_photos), 'a', newline='') as csvfile:
+          writer_node = csv.writer(csvfile, delimiter=',')
+          writer_node.writerow([neighbor, nodes[neighbor][1], nodes[neighbor][0],False,False,1e-8,0,1e-8,year])
 
 if __name__ == "__main__":
   main()
