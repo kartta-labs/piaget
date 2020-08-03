@@ -1,0 +1,33 @@
+{
+  "experiments": [
+    {
+      "path_to_features_json": "data/synthetic/kartta.json",
+      "nx": 25,
+      "ny": 25,
+      "bottom_left_x": -74.005412,
+      "bottom_left_y": 40.739218,
+      "top_right_x": -73.997376,
+      "top_right_y": 40.743333,
+      "years": [1920,1940],
+      "number_of_unique_photos_in_year": [10, 20],
+      "ratio_of_sameness_in_year": [0.1, 0.1],
+      "ratio_of_seeds_in_year": [0.3, 0.3],
+      "randomness_seed": 0
+    },
+    {
+      "path_to_features_json": "data/synthetic/kartta.json",
+      "nx": 50,
+      "ny": 50,
+      "bottom_left_x": -74.005412,
+      "bottom_left_y": 40.739218,
+      "top_right_x": -73.997376,
+      "top_right_y": 40.743333,
+      "years": [1930],
+      "number_of_unique_photos_in_year": [50],
+      "ratio_of_sameness_in_year": [0.2],
+      "ratio_of_seeds_in_year": [0.4],
+      "randomness_seed": 0
+    }
+
+  ]
+}
