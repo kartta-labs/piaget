@@ -24,16 +24,15 @@ from scipy.stats import multivariate_normal, truncnorm
 import matplotlib.pyplot as plt
 import time
 import argparse
-import yaml
 from pathlib import Path
 import re
 
 
 X = 1; Y= 0
 
-parser = argparse.ArgumentParser(description="Piaget: Enter the input YAML file using the --configs flag.")
+parser = argparse.ArgumentParser(description="Piaget: Enter the input JSON file using the --experiments flag.")
 required = parser.add_argument_group('required arguments')
-required.add_argument("--configs", help="path to the configs YAML file.", required=True)
+required.add_argument("--experiments", help="path to the experiments json file.", required=True)
 
 
 def get_valid_filename(s):
@@ -167,14 +166,14 @@ class ProbabilityGrid(object):
 
 
 class Geotagging(object):
-  def __init__(self, path_to_nodes_csv, path_to_edges_csv, bbox: Rectangle, ny, nx):
+  def __init__(self, bbox: Rectangle, ny, nx, path_to_nodes_csv = None, path_to_edges_csv = None, nodes_csv_list = None, edges_csv_list = None):
     self.graph = networkx.Graph()
     self.bbox = bbox
     self.nx = nx
     self.ny = ny
 
-    self.load_nodes(path_to_nodes_csv)
-    self.load_edges(path_to_edges_csv)
+    self.load_nodes(path_to_nodes_csv, nodes_csv_list)
+    self.load_edges(path_to_edges_csv, edges_csv_list)
 
   def set_attributes(self):
     header_to_index = {}
@@ -216,32 +215,35 @@ class Geotagging(object):
     for key in attributes_dict:
       networkx.set_node_attributes(self.graph, attributes_dict[key], key)
 
-  def load_nodes(self, path_to_csv):
+  def load_nodes(self, path_to_csv = None, nodes_csv_list = None):
     # Read the nodes csv file
-    with open(path_to_csv, "r") as nodecsv:
-        reader = csv.reader(nodecsv)
-        data = [n for n in reader]
-        # Get the first line in the csv as the header.
-        self.nodes_header = data[0]
-        self.nodes = data[1:]
+    if path_to_csv is not None:
+      nodes_csv_list = open(path_to_csv, "r")
+    reader = csv.reader(nodes_csv_list)
+    data = [n for n in reader]
+    print(data)
+    # Get the first line in the csv as the header.
+    self.nodes_header = data[0]
+    self.nodes = data[1:]
     # Store the node IDs (the first item in each row)
     self.node_ids = [n[0] for n in self.nodes]
     self.graph.add_nodes_from(self.node_ids)
     self.set_attributes()
 
-  def load_edges(self, path_to_csv):
+  def load_edges(self, path_to_csv = None, edges_csv_list = None):
     # Read the edges csv file
-    with open(path_to_csv, "r") as edgecsv:
-      reader = csv.reader(edgecsv)
-      data = [n for n in reader]
-      # edges = [tuple(e) for e in reader][1:]
-      self.edges = []
-      for e in data[1:]:
-        self.edges.append(
-          tuple(
-              [e[0],e[1],np.array([e[2],e[3]])]
-            )
-        )
+    if path_to_csv is not None:
+      edges_csv_list = open(path_to_csv, "r")
+    reader = csv.reader(edges_csv_list)
+    data = [n for n in reader]
+    # edges = [tuple(e) for e in reader][1:]
+    self.edges = []
+    for e in data[1:]:
+      self.edges.append(
+        tuple(
+            [e[0],e[1],np.array([e[2],e[3]])]
+          )
+      )
     self.graph.add_weighted_edges_from(self.edges, weight="mean_distance_and_standard_deviation")
 
   def propogate(self) -> bool:
@@ -282,61 +284,60 @@ class NumpyEncoder(json.JSONEncoder):
 def main():
   start_time = time.time()
   args = parser.parse_args()
-  print(args.configs)
-  with open(args.configs, "r") as stream:
-    configs = yaml.safe_load(stream)
+  with open(args.experiments, "r") as stream:
+    experiments = json.load(stream)
 
-  configs_path = Path(args.configs)
+  experiments_path = Path(args.experiments)
+  for configs in experiments["experiments"]:
+    bottom_left = Point(configs["bottom_left_y"], configs["bottom_left_x"])
+    top_right = Point(configs["top_right_y"], configs["top_right_x"])
+    nx = configs["nx"]
+    ny = configs["ny"]
+    bbox = Rectangle(bottom_left, top_right)
+    
+    geotagging = Geotagging(bbox=bbox, ny=ny, nx=nx, nodes_csv_list=configs["nodes"],edges_csv_list=configs["edges"])
+    print(networkx.info(geotagging.graph))
 
-  bottom_left = Point(configs["bottom_left_y"], configs["bottom_left_x"])
-  top_right = Point(configs["top_right_y"], configs["top_right_x"])
-  nx = configs["nx"]
-  ny = configs["ny"]
-  bbox = Rectangle(bottom_left, top_right)
-  
-  geotagging = Geotagging("{}/nodes.csv".format(configs_path.parent), "{}/edges.csv".format(configs_path.parent), bbox=bbox, ny=ny, nx=nx)
-  print(networkx.info(geotagging.graph))
+    counter = 0
+    while(True):
+      print("round {}".format(counter))
+      counter += 1
+      if(not geotagging.propogate()):
+        break
 
-  counter = 0
-  while(True):
-    print("round {}".format(counter))
-    counter += 1
-    if(not geotagging.propogate()):
-      break
+    print("results:")
+    """
+    plt.ioff()
+    for node in geotagging.graph.nodes:
+      node_attributes = geotagging.graph.nodes[node]
+      plt.close()
+      plt.imshow(node_attributes["probability_grid"].grid.cells, cmap="viridis", origin="lower",extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
+      plt.colorbar()
+      plt.savefig("{}/{}.png".format(experiments_path.parent,get_valid_filename(node)))
+      node_attributes["probability_grid"].normalize()
+      print("This node:")
+      print(node)
+      max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
+      print(max_pos_index)
+      print(node_attributes["probability_grid"].grid.pos[max_pos_index])
+      print(node_attributes["received_message_sources"])
+    """
 
-  print("results:")
-  """
-  plt.ioff()
-  for node in geotagging.graph.nodes:
-    node_attributes = geotagging.graph.nodes[node]
-    plt.close()
-    plt.imshow(node_attributes["probability_grid"].grid.cells, cmap="viridis", origin="lower",extent=[bottom_left.x, top_right.x, bottom_left.y, top_right.y])
-    plt.colorbar()
-    plt.savefig("{}/{}.png".format(configs_path.parent,get_valid_filename(node)))
-    node_attributes["probability_grid"].normalize()
-    print("This node:")
-    print(node)
-    max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
-    print(max_pos_index)
-    print(node_attributes["probability_grid"].grid.pos[max_pos_index])
-    print(node_attributes["received_message_sources"])
-  """
+    results = {}
+    for node in geotagging.graph.nodes:
+      node_attributes = geotagging.graph.nodes[node]
+      node_attributes["probability_grid"].normalize()
+      max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
+      node_attributes["max_probablity_cell_center"] = list(node_attributes["probability_grid"].grid.pos[max_pos_index])
+      node_attributes["distance_of_max_to_ground_truth"] = Grid.haversine_distance(node_attributes["mean_x"], node_attributes["mean_y"], node_attributes["max_probablity_cell_center"][X], node_attributes["max_probablity_cell_center"][Y])
+      node_attributes["probability_grid"] = node_attributes["probability_grid"].grid.cells
+      node_attributes["received_message_sources"] = list(node_attributes["received_message_sources"])
+      results[node] = {"attributes":node_attributes}
 
-  results = {}
-  for node in geotagging.graph.nodes:
-    node_attributes = geotagging.graph.nodes[node]
-    node_attributes["probability_grid"].normalize()
-    max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
-    node_attributes["max_probablity_cell_center"] = list(node_attributes["probability_grid"].grid.pos[max_pos_index])
-    node_attributes["distance_of_max_to_ground_truth"] = Grid.haversine_distance(node_attributes["mean_x"], node_attributes["mean_y"], node_attributes["max_probablity_cell_center"][X], node_attributes["max_probablity_cell_center"][Y])
-    node_attributes["probability_grid"] = node_attributes["probability_grid"].grid.cells
-    node_attributes["received_message_sources"] = list(node_attributes["received_message_sources"])
-    results[node] = {"attributes":node_attributes}
-
-  print(json.dumps(results,cls=NumpyEncoder))
-  with open("{}/results.txt".format(configs_path.parent), "w") as outfile:
-    json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
-  print("finished in {} rounds.".format(counter+1))
-  print(time.time() - start_time)
+    print(json.dumps(results,cls=NumpyEncoder))
+    with open("{}/results.txt".format(experiments_path.parent), "w") as outfile:
+      json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
+    print("finished in {} rounds.".format(counter+1))
+    print(time.time() - start_time)
 if __name__ == "__main__":
   main()

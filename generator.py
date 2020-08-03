@@ -1,8 +1,3 @@
-import math
-import csv
-from operator import itemgetter
-import random
-import json
 
 # Copyright 2020 Google LLC
 #
@@ -21,8 +16,21 @@ import json
 """ Piaget is a system to geotag historical building photos.
 """
 
+import math
+import csv
+from operator import itemgetter
+import random
+import json
+from pathlib import Path
+import argparse
+
+parser = argparse.ArgumentParser(description="Enter the input JSON configs using the --configs flag.")
+required = parser.add_argument_group('required arguments')
+required.add_argument("--configs", help="path to the configs json file.", required=True)
+
+
 class MapFeatures(object):
-  def __init__(self, years):
+  def __init__(self, path_to_features_json, years):
     self.years = years
     self.years_dict = {}
     self.data_dict = {}
@@ -30,15 +38,15 @@ class MapFeatures(object):
     self.nodes = {}
     self.edges = {}
 
-    self.read_input()
+    self.read_input(path_to_features_json)
     self.create_years_dict()
     self.create_address_dict()
     self.sort_housenumbers()
     self.create_all_nodes()
     self.create_all_edges()
 
-  def read_input(self):
-    with open('data/synthetic/kartta.json') as json_file:
+  def read_input(self, path_to_features_json):
+    with open(path_to_features_json) as json_file:
       self.raw_data = json.load(json_file)["data"]
 
   def create_years_dict(self):
@@ -129,9 +137,7 @@ class MapFeatures(object):
     # TODO: The following is buggy, not sure why. So we just return the mean.
     for i in range(len(points)-1):
       p1 = points[i]
-      print(p1)
       p2 = points[i+1]
-      print(p2)
       coefficient = p1[0] * p2[1] - p2[0] * p1[1]
       area += coefficient / 2.0
       lon += (p1[0] + p2[0]) * coefficient
@@ -161,82 +167,55 @@ class MapFeatures(object):
       return earth_radius_meters*c
 
 def main():
-  years = [1910, 1920, 1930, 1940, 1950, 1960]
-  map = MapFeatures(years)
-  for year in years:
-    print("info for {}:".format(year))
-    print(len(map.get_all_nodes()[year]))
-    print(len(map.get_all_edges()[year]))
-  
-  for node in map.get_all_nodes()[1940]:
-    print(node)
-    print(map.get_all_nodes()[1940][node])
+  args = parser.parse_args()
+  with open(args.configs, "r") as stream:
+    configs = json.load(stream)
+    configs_path = Path(args.configs)
 
-  for edge in map.get_all_edges()[1940]:
-    print(edge)
-    print(map.get_all_edges()[1940][edge])
+  payload = {"experiments":[]}
 
-  with open('data/synthetic/nodes.csv', 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile, delimiter=',')
-    writer.writerow(["id", "mean_y", "mean_x", "known_location", "locked", "cov_yy", "cov_yx", "cov_xx", "year"])
-    for year in years:
-      nodes = map.get_all_nodes()[year]
-      for node in nodes:
-        writer.writerow([node, nodes[node][1], nodes[node][0],True,True,1e-8,0,1e-8,year])
+  for experiment in configs["experiments"]:
+    node_to_neighbors = {}
+    years = experiment["years"]
+    map = MapFeatures(experiment["path_to_features_json"], years)
+    experiment["nodes"] = ["id,mean_y,mean_x,known_location,locked,cov_yy,cov_yx,cov_xx,year"]
+    experiment["edges"] = ["source,target,mean_distance,standard_deviation,year"]
 
-  with open('data/synthetic/edges.csv', 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile, delimiter=',')
-    writer.writerow(["source", "target", "mean_distance", "standard_deviation", "year"])
-    for year in years:
+    for i in range(len(years)):
+      year = years[i]
+      number_of_unique_photos = experiment["number_of_unique_photos_in_year"][i]
+      ratio_of_sameness = experiment["ratio_of_sameness_in_year"][i]
+      ratio_of_seeds = experiment["ratio_of_seeds_in_year"][i]
+      
+      node_to_neighbors[year] = {}
       edges = map.get_all_edges()[year]
       for edge in edges:
-        writer.writerow([edge[0], edge[1],edges[edge],0.1,year])
+        node_to_neighbors[year].setdefault(edge[0], set()).add(edge[1])
+        node_to_neighbors[year].setdefault(edge[1], set()).add(edge[0])
 
-  year = 1940
-  number_of_unique_photos = 10
-  ratio_of_sameness = 0.1
-  ratio_of_seeds = 0.3
-  nodes = map.get_all_nodes()[1940]
-  node_keys = list(nodes.keys())
-  random.seed(0)
-  random_indicies = [random.randint(0, len(node_keys)) for i in range(0, number_of_unique_photos)]
-  random_indicies_of_seeds = [random.randint(0, len(random_indicies)) for i in range(0, int(number_of_unique_photos*ratio_of_seeds))]
-  selected_nodes = set()
-  with open('data/synthetic/nodes-{}.csv'.format(number_of_unique_photos), 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile, delimiter=',')
-    writer.writerow(["id", "mean_y", "mean_x", "known_location", "locked", "cov_yy", "cov_yx", "cov_xx", "year"])
-    for i in range(len(random_indicies)):
-      node_key_index = random_indicies[i]
-      node = node_keys[node_key_index]
-      selected_nodes.add(node)
-      seed = i in random_indicies_of_seeds
-      writer.writerow([node, nodes[node][1], nodes[node][0],seed,seed,1e-8,0,1e-8,year])
+      nodes = map.get_all_nodes()[year]
+      node_keys = list(nodes.keys())
+      random.seed(experiment["randomness_seed"])
+      random_indicies = [random.randint(0, len(node_keys)) for i in range(0, number_of_unique_photos)]
+      random_indicies_of_seeds = [random.randint(0, len(random_indicies)) for i in range(0, int(number_of_unique_photos*ratio_of_seeds))]
+      selected_nodes = set()
+      for i in range(len(random_indicies)):
+        node_key_index = random_indicies[i]
+        node = node_keys[node_key_index]
+        selected_nodes.add(node)
+        seed = i in random_indicies_of_seeds
+        experiment["nodes"].append(",".join("{}".format(n) for n in [node, nodes[node][1], nodes[node][0],seed,seed,1e-8,0,1e-8,year]))
 
-  node_to_neighbors = {}
-  for year in years:
-    node_to_neighbors[year] = {}
-    edges = map.get_all_edges()[year]
-    for edge in edges:
-      node_to_neighbors[year].setdefault(edge[0], set()).add(edge[1])
-      node_to_neighbors[year].setdefault(edge[1], set()).add(edge[0])
-
-  print("laaaaaaaaaa")
-  with open('data/synthetic/edges-{}.csv'.format(number_of_unique_photos), 'w', newline='') as csvfile:
-    writer = csv.writer(csvfile, delimiter=',')
-    writer.writerow(["source", "target", "mean_distance", "standard_deviation", "year"])
-    edges = map.get_all_edges()[1940]
-    print(selected_nodes)
-    for node in selected_nodes:
-      print("new:")
-      print(node)
-      for neighbor in node_to_neighbors[1940][node]:
-        edge = (node,neighbor)
-        if (node,neighbor) not in edges:
-          edge = (neighbor,node)
-        writer.writerow([edge[0], edge[1],edges[edge],0.1,year])
-        with open('data/synthetic/nodes-{}.csv'.format(number_of_unique_photos), 'a', newline='') as csvfile:
-          writer_node = csv.writer(csvfile, delimiter=',')
-          writer_node.writerow([neighbor, nodes[neighbor][1], nodes[neighbor][0],False,False,1e-8,0,1e-8,year])
-
+      edges = map.get_all_edges()[year]
+      for node in selected_nodes:
+        for neighbor in node_to_neighbors[year][node]:
+          edge = (node,neighbor)
+          if (node,neighbor) not in edges:
+            edge = (neighbor,node)
+          experiment["edges"].append(",".join("{}".format(n) for n in [edge[0], edge[1],edges[edge],0.1,year]))
+          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor, nodes[neighbor][1], nodes[neighbor][0],False,False,1e-8,0,1e-8,year]))
+    payload["experiments"].append(experiment)
+  with open("data/synthetic/experiments.json", "w") as outfile:
+    json.dump(payload, outfile, sort_keys=True, indent=2)
 if __name__ == "__main__":
   main()
