@@ -200,6 +200,7 @@ def main():
   payload = {"experiments":[]}
 
   for experiment in configs["experiments"]:
+    np.random.seed(experiment["randomness_seed"])
     node_to_neighbors = {}
     years = experiment["years"]
     map = MapFeatures(experiment["path_to_features_json"], years)

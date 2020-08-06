@@ -26,6 +26,7 @@ import time
 import argparse
 from pathlib import Path
 import re
+from scipy import signal
 
 
 X = 1; Y= 0
@@ -174,12 +175,18 @@ class ProbabilityGrid(object):
       dist[dist==0] = np.finfo(float).eps
       dist_scaled = (dist - loc) / scale 
       self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(dist_scaled, a = a, b = np.inf) / (scale *dist)
-
     row, col = self.grid.get_pos_index(pos)
-    return_value = self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
-    if (np.sum(return_value) == 0):
-      pass
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
+
+  def get_full_truncnorm_grid(self, a, loc, scale):
+    key = np.array([a])
+    if key.tobytes() not in self.truncnorm_lookup_grid_cache:
+      truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
+      dist = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      dist[dist==0] = np.finfo(float).eps
+      dist_scaled = (dist - loc) / scale 
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(dist_scaled, a = a, b = np.inf) / (scale *dist)
+    return self.truncnorm_lookup_grid_cache[key.tobytes()]
 
 
 class Geotagging(object):
@@ -263,10 +270,12 @@ class Geotagging(object):
     self.graph.add_weighted_edges_from(self.edges, weight="mean_distance_and_standard_deviation")
 
   def propogate(self) -> bool:
+    propogate_time = time.time()
     at_least_one_probability_was_updated = False
     for node in self.graph.nodes:
       # print("node: {}".format(node))
       node_attributes = self.graph.nodes[node]
+      node_start = time.time()
       for neighbor in self.graph.neighbors(node):
         neighbor_attributes = self.graph.nodes[neighbor]
         [mean, std_or_prob] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
@@ -279,12 +288,17 @@ class Geotagging(object):
           node_attributes["probability_grid"].normalize()
           likelihood = (1 - node_attributes["probability_grid"].get_probability_in_cells()) * (1-std_or_prob)/(node_attributes["probability_grid"].grid.nx*node_attributes["probability_grid"].grid.ny-1) + node_attributes["probability_grid"].get_probability_in_cells() * std_or_prob
         else:
+          neighbor_start = time.time()
           a = (0 - mean) / std_or_prob
           # if it is a neighborhood edge.
           likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
-          for col in node_attributes["probability_grid"].grid.pos:
-            for pos in col:
-              likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std_or_prob)
+          
+          #for col in node_attributes["probability_grid"].grid.pos:
+          #  for pos in col:
+          #    likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std_or_prob)
+          likelihood =  signal.convolve2d(node_attributes["probability_grid"].get_probability_in_cells(),neighbor_attributes["probability_grid"].get_full_truncnorm_grid(a = a, loc = mean, scale = std_or_prob),mode="valid")
+          print("time: {}".format(time.time()-neighbor_start))
+
         if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"]) or edge_message not in neighbor_attributes["received_message_sources"]):
           # if no new message source is available, skip.
           neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
@@ -306,7 +320,6 @@ class NumpyEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 def main():
-  start_time = time.time()
   args = parser.parse_args()
   with open(args.experiments, "r") as stream:
     experiments = json.load(stream)
@@ -315,6 +328,7 @@ def main():
   results = {}
 
   for configs in experiments["experiments"]:
+    start_time = time.time()
     results[configs["id"]] = {}
     results[configs["id"]]["data"] = []
 
@@ -333,7 +347,8 @@ def main():
       counter += 1
       if(not geotagging.propogate()):
         break
-    
+      break
+    """
     plt.ioff()
     for node in geotagging.graph.nodes:
       node_attributes = geotagging.graph.nodes[node]
@@ -348,7 +363,7 @@ def main():
       print(max_pos_index)
       print(node_attributes["probability_grid"].grid.pos[max_pos_index])
       print(node_attributes["received_message_sources"])
-    
+    """
     average_distance_of_max_to_ground_truth = 0
     average_expected_distance_to_ground_truth = 0
     count = 0
@@ -368,14 +383,18 @@ def main():
       results[configs["id"]]["data"].append(node_attributes)
     results[configs["id"]]["summary"] = {
       "average_distance_of_max_to_ground_truth": average_distance_of_max_to_ground_truth/count,
-      "average_expected_distance_to_ground_truth": average_expected_distance_to_ground_truth/count
+      "average_expected_distance_to_ground_truth": average_expected_distance_to_ground_truth/count,
+      "time": time.time() - start_time,
+      "rounds": counter,
+      "networkx.info": networkx.info(geotagging.graph)
       }
 
     print(average_distance_of_max_to_ground_truth/count)
     print(average_expected_distance_to_ground_truth/count)
     with open("{}/results-{}-from-{}-to-{}.json".format(experiments_path.parent, experiments_path.stem, experiments["experiments"][0]["id"], experiments["experiments"][-1]["id"]), "w") as outfile:
       json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
-    print("finished in {} rounds.".format(counter+1))
+    print("finished in {} rounds.".format(counter))
     print(time.time() - start_time)
+    
 if __name__ == "__main__":
   main()
