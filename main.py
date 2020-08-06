@@ -347,7 +347,6 @@ def main():
       counter += 1
       if(not geotagging.propogate()):
         break
-      break
     """
     plt.ioff()
     for node in geotagging.graph.nodes:
