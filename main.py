@@ -74,6 +74,9 @@ class Grid(object):
     self.pos = np.dstack((self.y, self.x))
     self.cells = np.ones((self.ny, self.nx), dtype=float)
 
+  def get_area(self):
+    return self.dx * self.dy * self.nx * self.ny
+
   def get_cell(self, y, x):
     row = int((y - self.bbox.bottom_left.y)/self.dy)
     col = int((x - self.bbox.bottom_left.x)/self.dx)
@@ -147,21 +150,35 @@ class ProbabilityGrid(object):
 
   def get_probability_in_cell(self, y, x):
     return self.grid.get_cell(y, x) * self.grid.dy * self.grid.dx
- 
+
+  def get_probability_in_cells(self):
+    return self.grid.cells * self.grid.dy * self.grid.dx
+
   def get_truncnorm_grid_old(self, pos, a, loc, scale):
     key = np.array([pos[0], pos[1], a, loc, scale])
     if key.tobytes() not in self.truncnorm_grid_cache:
       self.truncnorm_grid_cache[key.tobytes()] = truncnorm.pdf(self.grid.distance_grid(pos), a, b = np.inf, loc = loc, scale = scale)
     return self.truncnorm_grid_cache[key.tobytes()]
 
+  def get_mixed_uniform_grid(self, pos, prob):
+    grid = Grid(bbox=self.grid.bbox, ny=self.grid.ny, nx=self.grid.nx)
+    grid.cells *= (1-prob)
+    row, col = grid.get_pos_index(pos)
+    grid.cell[row][col] = prob
+    
   def get_truncnorm_grid(self, pos, a, loc, scale):
-    key = np.array([a, loc, scale])
+    key = np.array([a])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
       truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
-      denominator = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
-      denominator[denominator==0] = np.finfo(float).eps
-      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0]), a = a, b = np.inf, loc = loc, scale = scale) / denominator
+      dist = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      dist[dist==0] = np.finfo(float).eps
+      dist_scaled = (dist - loc) / scale 
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(dist_scaled, a = a, b = np.inf) / (scale *dist)
+
     row, col = self.grid.get_pos_index(pos)
+    return_value = self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
+    if (np.sum(return_value) == 0):
+      pass
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
 
 
@@ -221,7 +238,6 @@ class Geotagging(object):
       nodes_csv_list = open(path_to_csv, "r")
     reader = csv.reader(nodes_csv_list)
     data = [n for n in reader]
-    print(data)
     # Get the first line in the csv as the header.
     self.nodes_header = data[0]
     self.nodes = data[1:]
@@ -249,24 +265,32 @@ class Geotagging(object):
   def propogate(self) -> bool:
     at_least_one_probability_was_updated = False
     for node in self.graph.nodes:
-      print("node: {}".format(node))
+      # print("node: {}".format(node))
       node_attributes = self.graph.nodes[node]
       for neighbor in self.graph.neighbors(node):
         neighbor_attributes = self.graph.nodes[neighbor]
-        [mean, std] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
-        a = (0 - mean) / std
-        print("neighbor: {}".format(neighbor))
+        [mean, std_or_prob] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
+        # print("neighbor: {}".format(neighbor))
         edge_message = [node, neighbor]
         edge_message.sort()
-        edge_message = "".join(edge_message)
-        likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
-        for col in node_attributes["probability_grid"].grid.pos:
-          for pos in col:
-            likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std)
+        edge_message = ";".join(edge_message)
+        if mean == 0:
+          # if it is a sameness edge.
+          node_attributes["probability_grid"].normalize()
+          likelihood = (1 - node_attributes["probability_grid"].get_probability_in_cells()) * (1-std_or_prob)/(node_attributes["probability_grid"].grid.nx*node_attributes["probability_grid"].grid.ny-1) + node_attributes["probability_grid"].get_probability_in_cells() * std_or_prob
+        else:
+          a = (0 - mean) / std_or_prob
+          # if it is a neighborhood edge.
+          likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
+          for col in node_attributes["probability_grid"].grid.pos:
+            for pos in col:
+              likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std_or_prob)
         if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"]) or edge_message not in neighbor_attributes["received_message_sources"]):
           # if no new message source is available, skip.
           neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
           neighbor_attributes["received_message_sources"].add(edge_message)
+          if np.sum(likelihood) == 0:
+            print("likelihood was zero for node {} and neighbor {}".format(node,neighbor))
           if (neighbor_attributes["locked"].lower() != "true" and np.sum(likelihood) > 0):
             # if the neighbor"s location is locker, skip.
             # if, for any reason, likelihood is zero, skip.
@@ -288,7 +312,12 @@ def main():
     experiments = json.load(stream)
 
   experiments_path = Path(args.experiments)
+  results = {}
+
   for configs in experiments["experiments"]:
+    results[configs["id"]] = {}
+    results[configs["id"]]["data"] = []
+
     bottom_left = Point(configs["bottom_left_y"], configs["bottom_left_x"])
     top_right = Point(configs["top_right_y"], configs["top_right_x"])
     nx = configs["nx"]
@@ -304,9 +333,7 @@ def main():
       counter += 1
       if(not geotagging.propogate()):
         break
-
-    print("results:")
-    """
+    
     plt.ioff()
     for node in geotagging.graph.nodes:
       node_attributes = geotagging.graph.nodes[node]
@@ -321,21 +348,32 @@ def main():
       print(max_pos_index)
       print(node_attributes["probability_grid"].grid.pos[max_pos_index])
       print(node_attributes["received_message_sources"])
-    """
-
-    results = {}
+    
+    average_distance_of_max_to_ground_truth = 0
+    average_expected_distance_to_ground_truth = 0
+    count = 0
     for node in geotagging.graph.nodes:
+      count += 1
       node_attributes = geotagging.graph.nodes[node]
       node_attributes["probability_grid"].normalize()
+      average_expected_distance_to_ground_truth += np.sum(node_attributes["probability_grid"].get_probability_in_cells() * node_attributes["probability_grid"].grid.distance_grid(np.array([node_attributes["mean_y"], node_attributes["mean_x"]])))
+
       max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
       node_attributes["max_probablity_cell_center"] = list(node_attributes["probability_grid"].grid.pos[max_pos_index])
       node_attributes["distance_of_max_to_ground_truth"] = Grid.haversine_distance(node_attributes["mean_x"], node_attributes["mean_y"], node_attributes["max_probablity_cell_center"][X], node_attributes["max_probablity_cell_center"][Y])
+      average_distance_of_max_to_ground_truth += node_attributes["distance_of_max_to_ground_truth"] 
       node_attributes["probability_grid"] = node_attributes["probability_grid"].grid.cells
       node_attributes["received_message_sources"] = list(node_attributes["received_message_sources"])
-      results[node] = {"attributes":node_attributes}
+      node_attributes["id"] = node
+      results[configs["id"]]["data"].append(node_attributes)
+    results[configs["id"]]["summary"] = {
+      "average_distance_of_max_to_ground_truth": average_distance_of_max_to_ground_truth/count,
+      "average_expected_distance_to_ground_truth": average_expected_distance_to_ground_truth/count
+      }
 
-    print(json.dumps(results,cls=NumpyEncoder))
-    with open("{}/results.txt".format(experiments_path.parent), "w") as outfile:
+    print(average_distance_of_max_to_ground_truth/count)
+    print(average_expected_distance_to_ground_truth/count)
+    with open("{}/results-{}-from-{}-to-{}.json".format(experiments_path.parent, experiments_path.stem, experiments["experiments"][0]["id"], experiments["experiments"][-1]["id"]), "w") as outfile:
       json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
     print("finished in {} rounds.".format(counter+1))
     print(time.time() - start_time)

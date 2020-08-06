@@ -1,6 +1,7 @@
 {
   "experiments": [
     {
+      "id": 1,
       "path_to_features_json": "data/synthetic/kartta.json",
       "nx": 25,
       "ny": 25,
@@ -15,6 +16,7 @@
       "randomness_seed": 0
     },
     {
+      "id": 2,
       "path_to_features_json": "data/synthetic/kartta.json",
       "nx": 50,
       "ny": 50,

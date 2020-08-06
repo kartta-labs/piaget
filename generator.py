@@ -23,6 +23,8 @@ import random
 import json
 from pathlib import Path
 import argparse
+import uuid
+import numpy as np
 
 parser = argparse.ArgumentParser(description="Enter the input JSON configs using the --configs flag.")
 required = parser.add_argument_group('required arguments')
@@ -146,7 +148,8 @@ class MapFeatures(object):
     coefficient = area * 6
     return [lon / coefficient, lat / coefficient]
 
-  def haversine_distance(self, point1, point2):
+  @staticmethod
+  def haversine_distance(point1, point2):
       """
       Calculate the distance between two points on the earth given
       their latitude and longitude in decimal degrees.
@@ -165,6 +168,28 @@ class MapFeatures(object):
       earth_radius_meters = 6371 * 1000
 
       return earth_radius_meters*c
+
+  @staticmethod
+  def generate_random_indicies(seed, count, maximum):
+    if count == 0:
+      return []
+    if count > maximum:
+      return [n for n in range(maximum + 1)]
+    indicies = set()
+    reverse = False
+    if count > int(maximum/2):
+      count = maximum + 1 - count
+      reverse = True
+    random.seed(seed)
+    while (True):
+      indicies.add(random.randint(0, maximum))
+      if len(indicies) == count:
+        break
+
+    if reverse:
+      all_indicies = set([n for n in range(maximum + 1)])
+      indicies = all_indicies.difference(indicies)
+    return list(indicies)
 
 def main():
   args = parser.parse_args()
@@ -186,7 +211,11 @@ def main():
       number_of_unique_photos = experiment["number_of_unique_photos_in_year"][i]
       ratio_of_sameness = experiment["ratio_of_sameness_in_year"][i]
       ratio_of_seeds = experiment["ratio_of_seeds_in_year"][i]
-      
+      ratio_of_seeds_in_year_among_sameness = experiment["ratio_of_seeds_in_year_among_sameness"][i]
+      ratio_of_false_matches_in_year =  experiment["ratio_of_false_matches_in_year"][i]
+      seed_cov_xx_and_cov_yy_degrees = experiment["seed_cov_xx_and_cov_yy_degrees"]
+
+
       node_to_neighbors[year] = {}
       edges = map.get_all_edges()[year]
       for edge in edges:
@@ -195,25 +224,89 @@ def main():
 
       nodes = map.get_all_nodes()[year]
       node_keys = list(nodes.keys())
-      random.seed(experiment["randomness_seed"])
-      random_indicies = [random.randint(0, len(node_keys)) for i in range(0, number_of_unique_photos)]
-      random_indicies_of_seeds = [random.randint(0, len(random_indicies)) for i in range(0, int(number_of_unique_photos*ratio_of_seeds))]
+      random_indicies = MapFeatures.generate_random_indicies(experiment["randomness_seed"], number_of_unique_photos, len(node_keys)-1)
+      random_indicies_of_seeds = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(number_of_unique_photos*ratio_of_seeds), len(random_indicies)-1)
       selected_nodes = set()
       for i in range(len(random_indicies)):
         node_key_index = random_indicies[i]
         node = node_keys[node_key_index]
-        selected_nodes.add(node)
+        photo_id = str(uuid.uuid4())
+        node_photo_id = node + ":" + photo_id
+        selected_nodes.add(node_photo_id)
         seed = i in random_indicies_of_seeds
-        experiment["nodes"].append(",".join("{}".format(n) for n in [node, nodes[node][1], nodes[node][0],seed,seed,1e-8,0,1e-8,year]))
+        experiment["nodes"].append(",".join("{}".format(n) for n in [node_photo_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+      neighbors_of_selected_nodes = []
+      for node_photo_id in sorted(selected_nodes):
+        node = node_photo_id.split(":")[0]
+        photo_id = node_photo_id.split(":")[1]
+        for neighbor in sorted(node_to_neighbors[year][node]):
+          neighbor_id = neighbor + ":" + photo_id
+          neighbors_of_selected_nodes.append(neighbor_id)
+          edge = (node, neighbor)
+          edge_id = (node_photo_id, neighbor_id)
+          if edge not in edges:
+            edge = (neighbor, node)
+            edge_id = (neighbor_id, node_photo_id)
+          distance = edges[edge]
+          if experiment["add_noise_to_mean_distance"].lower() == "true":
+            distance += np.random.normal(0, experiment["std"], 1)[0]
+            distance = max(0,distance)
+          experiment["edges"].append(",".join("{}".format(n) for n in [edge_id[0], edge_id[1],distance,experiment["std"],year]))
+          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
 
-      edges = map.get_all_edges()[year]
-      for node in selected_nodes:
+      # add sameness nodes
+      random_indicies = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(number_of_unique_photos*ratio_of_sameness), len(neighbors_of_selected_nodes)-1)
+      random_indicies_of_seeds = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(len(random_indicies)*ratio_of_seeds_in_year_among_sameness), len(random_indicies)-1)
+      selected_nodes = set()
+      for i in range(len(random_indicies)):
+        node_key_index = random_indicies[i]
+        node_photo_id = neighbors_of_selected_nodes[node_key_index]
+        node = node_photo_id.split(":")[0]
+        new_photo_id = str(uuid.uuid4())
+        node_new_id = node + ":" + new_photo_id
+        experiment["edges"].append(",".join("{}".format(n) for n in [node_photo_id, node_new_id,0,experiment["true_matching_confidence"],year]))
+        selected_nodes.add(node_new_id)
+        seed = i in random_indicies_of_seeds
+        experiment["nodes"].append(",".join("{}".format(n) for n in [node_new_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+      for node_photo_id in selected_nodes:
+        node = node_photo_id.split(":")[0]
+        photo_id = node_photo_id.split(":")[1]
         for neighbor in node_to_neighbors[year][node]:
+          neighbor_id = neighbor + ":" + photo_id
           edge = (node,neighbor)
-          if (node,neighbor) not in edges:
+          edge_id = (node_photo_id, neighbor_id)
+          if edge not in edges:
             edge = (neighbor,node)
-          experiment["edges"].append(",".join("{}".format(n) for n in [edge[0], edge[1],edges[edge],0.1,year]))
-          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor, nodes[neighbor][1], nodes[neighbor][0],False,False,1e-8,0,1e-8,year]))
+            edge_id = (neighbor_id, node_photo_id)
+          distance = edges[edge]
+          if experiment["add_noise_to_mean_distance"].lower() == "true":
+            distance += np.random.normal(0, experiment["std"], 1)[0]
+            distance = max(0,distance)
+          experiment["edges"].append(",".join("{}".format(n) for n in [edge_id[0], edge_id[1],distance,experiment["std"],year]))
+          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+
+      # add false matching
+      random_indicies = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(2 * number_of_unique_photos*ratio_of_false_matches_in_year), len(neighbors_of_selected_nodes)-1)
+      for i in range(int(len(random_indicies)/2)):
+        node_key_index_1 = random_indicies[i]
+        node_photo_id_1 = neighbors_of_selected_nodes[node_key_index_1]
+        node_key_index_2 = random_indicies[(len(random_indicies)-1-i) % len(random_indicies)]
+        node_photo_id_2 = neighbors_of_selected_nodes[node_key_index_2]
+        experiment["edges"].append(",".join("{}".format(n) for n in [node_photo_id_1, node_photo_id_2,0,experiment["false_matching_confidence"],year]))
+
+    node_to_photo = {}
+    for line in experiment["nodes"][1:]:
+      node_photo_id = line.split(",")[0]
+      node = node_photo_id.split(":")[0]
+      if node not in node_to_photo:
+        node_to_photo[node] = []
+      node_to_photo[node].append(node_photo_id.split(":")[1])
+    if experiment["find_matches"].lower() == "true":
+      for node in node_to_photo:
+        for photo in node_to_photo[node][1:]:
+          edge = (node + ":" + node_to_photo[node][0], node + ":" + photo)
+          experiment["edges"].append(",".join("{}".format(n) for n in [edge[0], edge[1],0,experiment["true_matching_confidence"],"0"]))
+
     payload["experiments"].append(experiment)
   with open("data/synthetic/experiments.json", "w") as outfile:
     json.dump(payload, outfile, sort_keys=True, indent=2)
