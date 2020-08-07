@@ -168,7 +168,7 @@ class ProbabilityGrid(object):
     grid.cell[row][col] = prob
     
   def get_truncnorm_grid(self, pos, a, loc, scale):
-    key = np.array([a])
+    key = np.array([a, loc, scale])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
       truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
       dist = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
@@ -179,13 +179,16 @@ class ProbabilityGrid(object):
     return self.truncnorm_lookup_grid_cache[key.tobytes()][self.grid.ny-1 - row:self.grid.ny-1 - row + self.grid.ny, self.grid.nx-1 - col:self.grid.nx-1 - col + self.grid.nx]
 
   def get_full_truncnorm_grid(self, a, loc, scale):
-    key = np.array([a])
+    key = np.array([a, loc, scale])
     if key.tobytes() not in self.truncnorm_lookup_grid_cache:
-      truncnorm_lookup_grid = Grid(bbox=Rectangle(bottom_left=Point(self.grid.bbox.bottom_left.y - (self.grid.ny-1) * self.grid.dy, self.grid.bbox.bottom_left.x - (self.grid.nx-1) * self.grid.dx), top_right=self.grid.bbox.top_right), ny=self.grid.ny*2-1, nx=self.grid.nx*2-1) 
-      dist = truncnorm_lookup_grid.distance_grid(self.grid.pos[0,0])
+      dist = self.grid.distance_grid(self.grid.pos[0,0])
       dist[dist==0] = np.finfo(float).eps
-      dist_scaled = (dist - loc) / scale 
-      self.truncnorm_lookup_grid_cache[key.tobytes()] = truncnorm.pdf(dist_scaled, a = a, b = np.inf) / (scale *dist)
+      dist_scaled = (dist - loc) / scale
+      top_right_slice = truncnorm.pdf(dist_scaled, a = a, b = np.inf) / (scale * dist)
+      lookup_grid = np.concatenate((np.fliplr(top_right_slice)[:,:-1],top_right_slice),axis=1)
+      lookup_grid = np.concatenate((np.flipud(lookup_grid)[:-1,:], lookup_grid), axis=0)
+      
+      self.truncnorm_lookup_grid_cache[key.tobytes()] = lookup_grid 
     return self.truncnorm_lookup_grid_cache[key.tobytes()]
 
 
@@ -275,7 +278,6 @@ class Geotagging(object):
     for node in self.graph.nodes:
       # print("node: {}".format(node))
       node_attributes = self.graph.nodes[node]
-      node_start = time.time()
       for neighbor in self.graph.neighbors(node):
         neighbor_attributes = self.graph.nodes[neighbor]
         [mean, std_or_prob] =  list(map(float, self.graph[node][neighbor]["mean_distance_and_standard_deviation"]))
@@ -288,16 +290,16 @@ class Geotagging(object):
           node_attributes["probability_grid"].normalize()
           likelihood = (1 - node_attributes["probability_grid"].get_probability_in_cells()) * (1-std_or_prob)/(node_attributes["probability_grid"].grid.nx*node_attributes["probability_grid"].grid.ny-1) + node_attributes["probability_grid"].get_probability_in_cells() * std_or_prob
         else:
-          neighbor_start = time.time()
           a = (0 - mean) / std_or_prob
           # if it is a neighborhood edge.
           likelihood = np.zeros((neighbor_attributes["probability_grid"].grid.ny, neighbor_attributes["probability_grid"].grid.nx), dtype=float)
           
+          # following is the old calculation of the likelihood, before I figured out it can be done
+          # by convolve2d. Keeping it for the record ...
           #for col in node_attributes["probability_grid"].grid.pos:
           #  for pos in col:
           #    likelihood += node_attributes["probability_grid"].get_probability_in_cell(pos[Y], pos[X]) * neighbor_attributes["probability_grid"].get_truncnorm_grid(pos = pos, a = a, loc = mean, scale = std_or_prob)
           likelihood =  signal.convolve2d(node_attributes["probability_grid"].get_probability_in_cells(),neighbor_attributes["probability_grid"].get_full_truncnorm_grid(a = a, loc = mean, scale = std_or_prob),mode="valid")
-          print("time: {}".format(time.time()-neighbor_start))
 
         if (not node_attributes["received_message_sources"].issubset(neighbor_attributes["received_message_sources"]) or edge_message not in neighbor_attributes["received_message_sources"]):
           # if no new message source is available, skip.
