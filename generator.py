@@ -214,8 +214,8 @@ def main():
       ratio_of_seeds = experiment["ratio_of_seeds_in_year"][i]
       ratio_of_seeds_in_year_among_sameness = experiment["ratio_of_seeds_in_year_among_sameness"][i]
       ratio_of_false_matches_in_year =  experiment["ratio_of_false_matches_in_year"][i]
-      seed_cov_xx_and_cov_yy_degrees = experiment["seed_cov_xx_and_cov_yy_degrees"]
-
+      seed_cov_xx_degrees = experiment["seed_cov_xx_degrees"]
+      seed_cov_yy_degrees = experiment["seed_cov_yy_degrees"]
 
       node_to_neighbors[year] = {}
       edges = map.get_all_edges()[year]
@@ -235,7 +235,7 @@ def main():
         node_photo_id = node + ":" + photo_id
         selected_nodes.add(node_photo_id)
         seed = i in random_indicies_of_seeds
-        experiment["nodes"].append(",".join("{}".format(n) for n in [node_photo_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+        experiment["nodes"].append(",".join("{}".format(n) for n in [node_photo_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_yy_degrees,0,seed_cov_xx_degrees,year]))
       neighbors_of_selected_nodes = []
       for node_photo_id in sorted(selected_nodes):
         node = node_photo_id.split(":")[0]
@@ -253,7 +253,7 @@ def main():
             distance += np.random.normal(0, experiment["std"], 1)[0]
             distance = max(0,distance)
           experiment["edges"].append(",".join("{}".format(n) for n in [edge_id[0], edge_id[1],distance,experiment["std"],year]))
-          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_yy_degrees,0,seed_cov_xx_degrees,year]))
 
       # add sameness nodes
       random_indicies = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(number_of_unique_photos*ratio_of_sameness), len(neighbors_of_selected_nodes)-1)
@@ -268,7 +268,7 @@ def main():
         experiment["edges"].append(",".join("{}".format(n) for n in [node_photo_id, node_new_id,0,experiment["true_matching_confidence"],year]))
         selected_nodes.add(node_new_id)
         seed = i in random_indicies_of_seeds
-        experiment["nodes"].append(",".join("{}".format(n) for n in [node_new_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+        experiment["nodes"].append(",".join("{}".format(n) for n in [node_new_id, nodes[node][1], nodes[node][0],seed,seed,seed_cov_yy_degrees,0,seed_cov_xx_degrees,year]))
       for node_photo_id in selected_nodes:
         node = node_photo_id.split(":")[0]
         photo_id = node_photo_id.split(":")[1]
@@ -284,7 +284,7 @@ def main():
             distance += np.random.normal(0, experiment["std"], 1)[0]
             distance = max(0,distance)
           experiment["edges"].append(",".join("{}".format(n) for n in [edge_id[0], edge_id[1],distance,experiment["std"],year]))
-          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_xx_and_cov_yy_degrees,0,seed_cov_xx_and_cov_yy_degrees,year]))
+          experiment["nodes"].append(",".join("{}".format(n) for n in [neighbor_id, nodes[neighbor][1], nodes[neighbor][0],False,False,seed_cov_yy_degrees,0,seed_cov_xx_degrees,year]))
 
       # add false matching
       random_indicies = MapFeatures.generate_random_indicies(experiment["randomness_seed"], int(2 * number_of_unique_photos*ratio_of_false_matches_in_year), len(neighbors_of_selected_nodes)-1)
@@ -309,7 +309,7 @@ def main():
           experiment["edges"].append(",".join("{}".format(n) for n in [edge[0], edge[1],0,experiment["true_matching_confidence"],"0"]))
 
     payload["experiments"].append(experiment)
-  with open("data/synthetic/experiments.json", "w") as outfile:
+  with open("data/synthetic/{}-experiments.json".format(configs_path.stem), "w") as outfile:
     json.dump(payload, outfile, sort_keys=True, indent=2)
 if __name__ == "__main__":
   main()

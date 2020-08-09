@@ -305,8 +305,8 @@ class Geotagging(object):
           # if no new message source is available, skip.
           neighbor_attributes["received_message_sources"].update(node_attributes["received_message_sources"])
           neighbor_attributes["received_message_sources"].add(edge_message)
-          if np.sum(likelihood) == 0:
-            print("likelihood was zero for node {} and neighbor {}".format(node,neighbor))
+          #if np.sum(likelihood) == 0:
+            #print("likelihood was zero for node {} and neighbor {}".format(node,neighbor))
           if (neighbor_attributes["locked"].lower() != "true" and np.sum(likelihood) > 0):
             # if the neighbor"s location is locker, skip.
             # if, for any reason, likelihood is zero, skip.
@@ -349,8 +349,9 @@ def main():
       counter += 1
       if(not geotagging.propogate()):
         break
-    """
+    
     plt.ioff()
+    """
     for node in geotagging.graph.nodes:
       node_attributes = geotagging.graph.nodes[node]
       plt.close()
@@ -372,8 +373,8 @@ def main():
       count += 1
       node_attributes = geotagging.graph.nodes[node]
       node_attributes["probability_grid"].normalize()
-      average_expected_distance_to_ground_truth += np.sum(node_attributes["probability_grid"].get_probability_in_cells() * node_attributes["probability_grid"].grid.distance_grid(np.array([node_attributes["mean_y"], node_attributes["mean_x"]])))
-
+      node_attributes["expected_distance_to_ground_truth"] = np.sum(node_attributes["probability_grid"].get_probability_in_cells() * node_attributes["probability_grid"].grid.distance_grid(np.array([node_attributes["mean_y"], node_attributes["mean_x"]])))
+      average_expected_distance_to_ground_truth += node_attributes["expected_distance_to_ground_truth"] 
       max_pos_index = (np.unravel_index(node_attributes["probability_grid"].grid.cells.argmax(), node_attributes["probability_grid"].grid.cells.shape))
       node_attributes["max_probablity_cell_center"] = list(node_attributes["probability_grid"].grid.pos[max_pos_index])
       node_attributes["distance_of_max_to_ground_truth"] = Grid.haversine_distance(node_attributes["mean_x"], node_attributes["mean_y"], node_attributes["max_probablity_cell_center"][X], node_attributes["max_probablity_cell_center"][Y])
@@ -387,15 +388,27 @@ def main():
       "average_expected_distance_to_ground_truth": average_expected_distance_to_ground_truth/count,
       "time": time.time() - start_time,
       "rounds": counter,
-      "networkx.info": networkx.info(geotagging.graph)
+      "networkx.info": networkx.info(geotagging.graph),
+      "number_of_nodes": geotagging.graph.number_of_nodes(),
+      "number_of_edges": geotagging.graph.number_of_edges(), 
+      "number_of_connected_components": networkx.number_connected_components(geotagging.graph)
       }
-
-    print(average_distance_of_max_to_ground_truth/count)
-    print(average_expected_distance_to_ground_truth/count)
-    with open("{}/results-{}-from-{}-to-{}.json".format(experiments_path.parent, experiments_path.stem, experiments["experiments"][0]["id"], experiments["experiments"][-1]["id"]), "w") as outfile:
-      json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
+    print("summary:")  
+    print(results[configs["id"]]["summary"])
     print("finished in {} rounds.".format(counter))
     print(time.time() - start_time)
+    
+    for edge in geotagging.graph.edges:
+      mean_distance_and_standard_deviation = geotagging.graph.edges[edge]["mean_distance_and_standard_deviation"]
+      geotagging.graph.edges[edge]["mean_distance_and_standard_deviation"] = float(mean_distance_and_standard_deviation[0])**10
+    networkx.write_edgelist(geotagging.graph, path="graph.edgelist", delimiter=";")
+    H = networkx.read_edgelist(path="graph.edgelist", delimiter=";")
+    networkx.draw(H)
+    plt.show()
+    plt.savefig("graph.png")
+
+  with open("{}/results-{}-from-{}-to-{}.json".format(experiments_path.parent, experiments_path.stem, experiments["experiments"][0]["id"], experiments["experiments"][-1]["id"]), "w") as outfile:
+    json.dump(results, outfile, cls=NumpyEncoder, sort_keys=True, indent=2)
     
 if __name__ == "__main__":
   main()
